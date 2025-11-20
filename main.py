@@ -21,7 +21,15 @@ from astrbot.core.message.message_event_result import MessageChain
 # 游戏常量
 LOG_SEPARATOR = "=" * 30  # 游戏日志分隔线
 
-
+# 在 GameConfig 类定义之前或其中添加预置配置
+PRESET_CONFIGS = {
+    5:  {"werewolf": 2, "seer": 1, "witch": 0, "hunter": 1, "villager": 1},
+    6:  {"werewolf": 2, "seer": 1, "witch": 0, "hunter": 1, "villager": 2},
+    7:  {"werewolf": 2, "seer": 1, "witch": 1, "hunter": 1, "villager": 2},
+    8:  {"werewolf": 3, "seer": 1, "witch": 1, "hunter": 1, "villager": 2},
+    9:  {"werewolf": 3, "seer": 1, "witch": 1, "hunter": 1, "villager": 3}, # 标准局
+    10: {"werewolf": 3, "seer": 1, "witch": 1, "hunter": 1, "villager": 4},
+}
 class GameConfig:
     """游戏配置常量"""
     TOTAL_PLAYERS = 9          # 总玩家数
@@ -118,10 +126,10 @@ class WerewolfPlugin(Star):
             f"({GameConfig.WEREWOLF_COUNT}狼{GameConfig.SEER_COUNT+GameConfig.WITCH_COUNT+GameConfig.HUNTER_COUNT}神{GameConfig.VILLAGER_COUNT}民) | "
             f"AI复盘：{ai_status}"
         )
-
+        
     @filter.command("创建房间")
-    async def create_room(self, event: AstrMessageEvent):
-        """创建游戏房间"""
+    async def create_room(self, event: AstrMessageEvent, player_count: int = 9): # 默认为9
+        """创建游戏房间：/创建房间 [人数]"""
         group_id = event.get_group_id()
         if not group_id:
             yield event.plain_result("⚠️ 请在群聊中使用此命令！")
@@ -130,72 +138,82 @@ class WerewolfPlugin(Star):
         if group_id in self.game_rooms:
             yield event.plain_result("❌ 当前群已存在游戏房间！请先结束现有游戏。")
             return
+        
+        # 1. 检查是否有预置配置
+        if player_count not in PRESET_CONFIGS:
+            supported = ", ".join(map(str, PRESET_CONFIGS.keys()))
+            yield event.plain_result(f"❌ 不支持 {player_count} 人局。\n目前支持的人数：{supported}")
+            return
 
-        # 初始化房间
+        # 2. 获取该人数的配置
+        config = PRESET_CONFIGS[player_count]
+        
+        # 3. 初始化房间，将配置存入房间数据中
         self.game_rooms[group_id] = {
-            "players": set(),           # 玩家集合
-            "player_names": {},         # {玩家ID: 昵称}
-            "roles": {},                # {玩家ID: "werewolf"/"seer"/"witch"/"hunter"/"villager"}
-            "alive": set(),             # 存活玩家集合
-            "phase": GamePhase.WAITING, # 当前阶段
-            "creator": event.get_sender_id(),  # 房主
-            "night_votes": {},          # 夜晚投票：{狼人ID: 目标ID}
-            "day_votes": {},            # 白天投票：{玩家ID: 目标ID}
-            "night_result": None,       # 夜晚结果消息（待发布）
-            "msg_origin": event.unified_msg_origin,  # 群聊消息源（用于主动发送）
-            "seer_checked": False,      # 预言家是否已验人
-            "banned_players": set(),    # 被禁言的玩家集合
-            "bot": event.bot,           # Bot实例（用于禁言操作）
-            "timer_task": None,         # 定时器任务
-            "speaking_order": [],       # 发言顺序列表
-            "current_speaker_index": 0, # 当前发言者索引
-            "current_speaker": None,    # 当前发言者ID
-            "temp_admins": set(),       # 临时管理员集合（发言时设置）
-            "last_killed": None,        # 上一晚被杀的玩家ID（用于遗言）
-            "witch_poison_used": False, # 女巫毒药是否已使用
-            "witch_antidote_used": False, # 女巫解药是否已使用
-            "witch_saved": None,        # 女巫本晚救的玩家ID
-            "witch_poisoned": None,     # 女巫本晚毒的玩家ID
-            "witch_acted": False,       # 女巫是否已行动
-            "is_first_night": True,     # 是否第一晚（只有第一晚有遗言）
-            "last_words_from_vote": False, # 遗言是否来自投票放逐
-            "pk_players": [],           # 平票PK的玩家列表
-            "is_pk_vote": False,        # 是否是PK投票（二次投票）
-            "player_numbers": {},       # 玩家编号：{玩家ID: 编号(1-9)}
-            "number_to_player": {},     # 编号到玩家的映射：{编号: 玩家ID}
-            "original_group_cards": {}, # 原始群昵称：{玩家ID: 原始昵称}
-            "hunter_shot": False,       # 猎人是否已开枪
-            "pending_hunter_shot": None,# 待开枪的猎人ID
-            "hunter_death_type": None,  # 猎人死亡方式：'wolf'(狼杀)/'vote'(投票)/'poison'(毒杀)
-            "game_log": [],             # 游戏日志：记录关键事件用于AI复盘
-            "current_round": 0,         # 当前回合数
-            "current_speech": [],       # 当前发言者的发言内容（临时存储）
+            "config": {
+                "total": player_count,
+                "werewolf": config["werewolf"],
+                "seer": config["seer"],
+                "witch": config["witch"],
+                "hunter": config["hunter"],
+                "villager": config["villager"]
+            },
+            "players": set(),           
+            "player_names": {},         
+            "roles": {},                
+            "alive": set(),             
+            "phase": GamePhase.WAITING, 
+            "creator": event.get_sender_id(),
+            "night_votes": {},          
+            "day_votes": {},            
+            "night_result": None,       
+            "msg_origin": event.unified_msg_origin, 
+            "seer_checked": False,      
+            "banned_players": set(),    
+            "bot": event.bot,           
+            "timer_task": None,         
+            "speaking_order": [],       
+            "current_speaker_index": 0, 
+            "current_speaker": None,    
+            "temp_admins": set(),       
+            "last_killed": None,        
+            "witch_poison_used": False, 
+            "witch_antidote_used": False, 
+            "witch_saved": None,        
+            "witch_poisoned": None,     
+            "witch_acted": False,       
+            "is_first_night": True,     
+            "last_words_from_vote": False, 
+            "pk_players": [],           
+            "is_pk_vote": False,        
+            "player_numbers": {},       
+            "number_to_player": {},     
+            "original_group_cards": {}, 
+            "hunter_shot": False,       
+            "pending_hunter_shot": None,
+            "hunter_death_type": None,  
+            "game_log": [],             
+            "current_round": 0,         
+            "current_speech": [],       
         }
 
-        # 构建角色配置描述
-        god_count = GameConfig.SEER_COUNT + GameConfig.WITCH_COUNT + GameConfig.HUNTER_COUNT
+        # 构建角色配置描述用于回显
+        cfg = self.game_rooms[group_id]["config"]
         god_roles = []
-        if GameConfig.SEER_COUNT > 0:
-            god_roles.append(f"预言家×{GameConfig.SEER_COUNT}" if GameConfig.SEER_COUNT > 1 else "预言家")
-        if GameConfig.WITCH_COUNT > 0:
-            god_roles.append(f"女巫×{GameConfig.WITCH_COUNT}" if GameConfig.WITCH_COUNT > 1 else "女巫")
-        if GameConfig.HUNTER_COUNT > 0:
-            god_roles.append(f"猎人×{GameConfig.HUNTER_COUNT}" if GameConfig.HUNTER_COUNT > 1 else "猎人")
+        if cfg["seer"] > 0: god_roles.append(f"预言家×{cfg['seer']}")
+        if cfg["witch"] > 0: god_roles.append(f"女巫×{cfg['witch']}")
+        if cfg["hunter"] > 0: god_roles.append(f"猎人×{cfg['hunter']}")
 
         yield event.plain_result(
             f"✅ 狼人杀房间创建成功！\n\n"
             f"📋 游戏规则：\n"
-            f"• {GameConfig.TOTAL_PLAYERS}人局（{GameConfig.WEREWOLF_COUNT}狼人 + {god_count}神 + {GameConfig.VILLAGER_COUNT}平民）\n"
+            f"• {cfg['total']}人局（{cfg['werewolf']}狼人 + {cfg['seer']+cfg['witch']+cfg['hunter']}神 + {cfg['villager']}平民）\n"
             f"• 神职：{' + '.join(god_roles)}\n"
-            f"• 夜晚：狼人办掉 → 预言家验人 → 女巫行动\n"
-            f"• 白天：遗言 → 发言 → 投票放逐\n"
-            f"• 遗言规则：第一晚被狼杀有遗言，投票放逐有遗言，被毒无遗言\n"
-            f"• 猎人：被狼杀或投票放逐可开枪，被毒不能开枪\n"
-            f"• 游戏结束后生成AI复盘报告\n\n"
+            f"• 游戏结束后{'生成' if self.enable_ai_review else '不生成'}AI复盘\n\n"
             f"💡 使用 /加入房间 来参与游戏\n"
-            f"👥 {GameConfig.TOTAL_PLAYERS}人齐全后，房主使用 /开始游戏"
+            f"👥 {cfg['total']}人齐全后，房主使用 /开始游戏"
         )
-
+        
     @filter.command("加入房间")
     async def join_room(self, event: AstrMessageEvent):
         """加入游戏"""
@@ -218,10 +236,11 @@ class WerewolfPlugin(Star):
             yield event.plain_result("⚠️ 你已经在游戏中了！")
             return
 
-        if len(room["players"]) >= GameConfig.TOTAL_PLAYERS:
-            yield event.plain_result(f"❌ 房间已满（{GameConfig.TOTAL_PLAYERS}/{GameConfig.TOTAL_PLAYERS}）！")
-            return
+        max_players = room["config"]["total"] # 修改这里：从房间配置获取总人数
 
+        if len(room["players"]) >= max_players:
+            yield event.plain_result(f"❌ 房间已满（{max_players}/{max_players}）！")
+            return
         # 加入游戏
         room["players"].add(player_id)
 
@@ -263,8 +282,9 @@ class WerewolfPlugin(Star):
 
         yield event.plain_result(
             f"✅ 成功加入游戏！\n\n"
-            f"当前人数：{len(room['players'])}/{GameConfig.TOTAL_PLAYERS}"
+            f"当前人数：{len(room['players'])}/{max_players}"
         )
+
 
     @filter.command("开始游戏")
     async def start_game(self, event: AstrMessageEvent):
@@ -275,15 +295,15 @@ class WerewolfPlugin(Star):
             return
 
         room = self.game_rooms[group_id]
-
+        config = room["config"] # 获取房间配置
         # 验证房主权限
         if event.get_sender_id() != room["creator"]:
             yield event.plain_result("⚠️ 只有房主才能开始游戏！")
             return
 
         # 验证人数
-        if len(room["players"]) != GameConfig.TOTAL_PLAYERS:
-            yield event.plain_result(f"❌ 人数不足！当前 {len(room['players'])}/{GameConfig.TOTAL_PLAYERS} 人")
+        if len(room["players"]) != config["total"]:
+            yield event.plain_result(f"❌ 人数不足！当前 {len(room['players'])}/{config['total']} 人")
             return
 
         if room["phase"] != GamePhase.WAITING:
@@ -298,8 +318,13 @@ class WerewolfPlugin(Star):
             room["player_numbers"][player_id] = index
             room["number_to_player"][index] = player_id
 
-        # 创建并打乱角色列表
-        roles_pool = GameConfig.get_roles_pool()
+        roles_pool = (
+            ["werewolf"] * config["werewolf"] +
+            ["seer"] * config["seer"] +
+            ["witch"] * config["witch"] +
+            ["hunter"] * config["hunter"] +
+            ["villager"] * config["villager"]
+        )
         random.shuffle(roles_pool)
 
         # 分配角色
@@ -1340,19 +1365,45 @@ class WerewolfPlugin(Star):
     @filter.command("狼人杀帮助")
     async def show_help(self, event: AstrMessageEvent):
         """显示帮助信息"""
-        # 动态生成游戏配置描述
-        god_count = GameConfig.SEER_COUNT + GameConfig.WITCH_COUNT + GameConfig.HUNTER_COUNT
+        group_id = event.get_group_id()
+        
+        # --- 1. 获取当前房间的具体配置（如果在房间里） ---
+        current_room_info = ""
+        room_config = None
+        
+        if group_id in self.game_rooms:
+            cfg = self.game_rooms[group_id]["config"]
+            room_config = cfg # 保存下来后面用
+            god_num = cfg['seer'] + cfg['witch'] + cfg['hunter']
+            current_room_info = (
+                f"\n📊 当前房间配置：\n"
+                f"• 总人数：{cfg['total']}人\n"
+                f"• 配置：{cfg['werewolf']}狼 + {god_num}神 + {cfg['villager']}民\n"
+                f"  (预言家{cfg['seer']}, 女巫{cfg['witch']}, 猎人{cfg['hunter']})"
+            )
+            # 如果在房间里，最大编号就是房间总人数
+            max_number = cfg['total']
+        else:
+            # 如果不在房间里，使用默认或提示查看创建命令
+            max_number = "N" 
+            current_room_info = "\n💡 提示：使用 /创建房间 [人数] 可查看不同人数的配置详情。"
 
+        # 获取支持的人数列表
+        supported_players = "/".join(map(str, PRESET_CONFIGS.keys()))
+
+        # --- 2. 构建帮助文本 ---
+        # 注意：这里去掉了具体的 GameConfig.XXX 常量，改为通用描述或基于当前房间的描述
+        
         help_text = (
             "📖 狼人杀游戏 - 命令列表\n\n"
             "基础命令：\n"
-            "  /创建房间 - 创建游戏房间\n"
+            f"  /创建房间 [人数] - 创建房间 (支持: {supported_players}人)\n"
             "  /加入房间 - 加入房间\n"
             "  /开始游戏 - 开始游戏（房主）\n"
             "  /查角色 - 查看角色（私聊）\n"
             "  /游戏状态 - 查看游戏状态\n"
             "  /结束游戏 - 结束游戏（房主）\n\n"
-            f"游戏命令（使用编号1-{GameConfig.TOTAL_PLAYERS}）：\n"
+            f"游戏命令（使用编号 1-{max_number}）：\n"
             "  /办掉 编号 - 狼人夜晚办掉（如：/办掉 1）\n"
             "  /密谋 消息 - 狼人与队友交流\n"
             "  /验人 编号 - 预言家查验（如：/验人 3）\n"
@@ -1365,16 +1416,15 @@ class WerewolfPlugin(Star):
             "  /投票 编号 - 白天投票放逐（如：/投票 2）\n"
             "  /开始投票 - 跳过发言直接投票（房主）\n\n"
             "游戏规则：\n"
-            f"• {GameConfig.TOTAL_PLAYERS}人局：{GameConfig.WEREWOLF_COUNT}狼人 + {god_count}神 + {GameConfig.VILLAGER_COUNT}平民\n"
-            f"• 使用编号（1-{GameConfig.TOTAL_PLAYERS}号）代替QQ号\n"
+            f"• 胜利条件：\n"
+            "  🐺 狼人胜利：好人数量 ≤ 狼人 或 神职全灭\n"
+            "  ✅ 好人胜利：狼人全部出局\n"
             "• 遗言规则：第一晚被狼杀有遗言，投票放逐有遗言，被毒无遗言\n"
-            "• 猎人：被狼杀或投票放逐可开枪，被毒不能开枪\n"
-            f"• 游戏结束后{'生成AI复盘报告' if self.enable_ai_review else '不生成AI复盘'}\n"
-            "• 狼人胜利：好人 ≤ 狼人 或 神职全灭\n"
-            "• 好人胜利：狼人全部出局"
+            "• 猎人技能：被狼杀或投票放逐可开枪，被毒不能开枪\n"
+            f"• 游戏复盘：{'开启' if self.enable_ai_review else '关闭'}\n"
+            f"{current_room_info}"
         )
         yield event.plain_result(help_text)
-
     # ========== 辅助函数 ==========
 
     def _get_player_room(self, player_id: str) -> tuple:
