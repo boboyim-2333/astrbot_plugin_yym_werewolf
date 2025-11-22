@@ -1198,26 +1198,33 @@ class WerewolfPlugin(Star):
         # 获取目标（支持@、编号、QQ号）
         target_str = self._get_target_user(event)
         if not target_str:
-            yield event.plain_result("❌ 请指定投票目标！\n使用：/投票 编号\n示例：/投票 2")
+            yield event.plain_result("❌ 请指定投票目标！\n使用：/投票 编号 (输入 0 弃票)\n示例：/投票 2")
             return
 
-        # 解析目标（编号或QQ号）
-        target_id = self._parse_target(target_str, room)
-        if not target_id:
-            yield event.plain_result(f"❌ 无效的目标：{target_str}\n请使用玩家编号（1-9）")
-            return
+        # === 修改点 1：处理弃票逻辑 ===
+        target_id = None
+        if target_str == "0":
+            target_id = "ABSTAIN"
+        else:
+            # 解析目标（编号或QQ号）
+            target_id = self._parse_target(target_str, room)
 
-        # 验证目标存活
-        if target_id not in room["alive"]:
+        # 验证逻辑
+        if target_id == "ABSTAIN":
+            # 弃票总是允许的
+            pass
+        elif not target_id:
+            yield event.plain_result(f"❌ 无效的目标：{target_str}\n请使用玩家编号（1-9），或输入 0 弃票")
+            return
+        elif target_id not in room["alive"]:
             yield event.plain_result("❌ 目标玩家已经出局！")
             return
-
-        # 如果是PK投票，验证目标必须在PK玩家列表中
-        if room.get("is_pk_vote"):
+        elif room.get("is_pk_vote"):
+            # 如果是PK投票，验证目标必须在PK玩家列表中
             if target_id not in room.get("pk_players", []):
                 pk_names = [self._format_player_name(pid, room) for pid in room["pk_players"]]
                 yield event.plain_result(
-                    f"❌ PK投票只能投给平票玩家！\n\n"
+                    f"❌ PK投票只能投给平票玩家！(或输入 0 弃票)\n\n"
                     f"可投票对象：\n" + "\n".join([f"  • {name}" for name in pk_names])
                 )
                 return
@@ -1227,13 +1234,21 @@ class WerewolfPlugin(Star):
 
         # 记录日志
         voter_name = self._format_player_name(player_id, room)
-        target_name = self._format_player_name(target_id, room)
-        if room.get("is_pk_vote"):
-            room["game_log"].append(f"🗳️ PK投票：{voter_name} 投给 {target_name}")
+        
+        # === 修改点 2：针对弃票的日志和回复 ===
+        if target_id == "ABSTAIN":
+            if room.get("is_pk_vote"):
+                room["game_log"].append(f"🗳️ PK投票：{voter_name} 弃票")
+            else:
+                room["game_log"].append(f"🗳️ {voter_name} 弃票")
+            yield event.plain_result(f"✅ 你选择了弃票！当前已投票 {len(room['day_votes'])}/{len(room['alive'])} 人")
         else:
-            room["game_log"].append(f"🗳️ {voter_name} 投票给 {target_name}")
-
-        yield event.plain_result(f"✅ 投票成功！当前已投票 {len(room['day_votes'])}/{len(room['alive'])} 人")
+            target_name = self._format_player_name(target_id, room)
+            if room.get("is_pk_vote"):
+                room["game_log"].append(f"🗳️ PK投票：{voter_name} 投给 {target_name}")
+            else:
+                room["game_log"].append(f"🗳️ {voter_name} 投票给 {target_name}")
+            yield event.plain_result(f"✅ 投票成功！当前已投票 {len(room['day_votes'])}/{len(room['alive'])} 人")
 
         # 检查是否所有人都投票了
         if len(room["day_votes"]) >= len(room["alive"]):
