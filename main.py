@@ -24,7 +24,7 @@ LOG_SEPARATOR = "=" * 30  # 游戏日志分隔线
 # 在 GameConfig 类定义之前或其中添加预置配置
 PRESET_CONFIGS = {
     5:  {"werewolf": 2, "seer": 1, "witch": 0, "hunter": 1, "villager": 1},
-    6:  {"werewolf": 2, "seer": 1, "witch": 0, "hunter": 1, "villager": 2},
+    6:  {"werewolf": 2, "seer": 1, "witch": 1, "hunter": 1, "villager": 1},
     7:  {"werewolf": 2, "seer": 1, "witch": 1, "hunter": 1, "villager": 2},
     8:  {"werewolf": 3, "seer": 1, "witch": 1, "hunter": 1, "villager": 2},
     9:  {"werewolf": 3, "seer": 1, "witch": 1, "hunter": 1, "villager": 3}, # 标准局
@@ -213,7 +213,28 @@ class WerewolfPlugin(Star):
             f"💡 使用 /加入房间 来参与游戏\n"
             f"👥 {cfg['total']}人齐全后，房主使用 /开始游戏"
         )
+    @filter.command("解散房间")
+    async def dismiss_room(self, event: AstrMessageEvent):
+        """解散当前房间（房主专用）"""
+        group_id = event.get_group_id()
+        if not group_id or group_id not in self.game_rooms:
+            yield event.plain_result("❌ 当前群没有已创建的房间！")
+            return
+
+        room = self.game_rooms[group_id]
         
+        # 验证房主权限
+        if event.get_sender_id() != room["creator"]:
+            yield event.plain_result("⚠️ 只有房主才能解散房间！")
+            return
+
+        # 只有在等待阶段或游戏结束阶段才建议用"解散"，如果游戏已开始建议用"结束游戏"
+        # 但为了方便，这里允许任何阶段解散，逻辑同结束游戏
+        
+        # 清理房间
+        await self._cleanup_room(group_id)
+
+        yield event.plain_result("✅ 房间已成功解散！")
     @filter.command("加入房间")
     async def join_room(self, event: AstrMessageEvent):
         """加入游戏"""
@@ -1398,6 +1419,7 @@ class WerewolfPlugin(Star):
             "📖 狼人杀游戏 - 命令列表\n\n"
             "基础命令：\n"
             f"  /创建房间 [人数] - 创建房间 (支持: {supported_players}人)\n"
+            "  /解散房间 - 解散未开始的房间（房主）\n"  # <--- 新增这一行
             "  /加入房间 - 加入房间\n"
             "  /开始游戏 - 开始游戏（房主）\n"
             "  /查角色 - 查看角色（私聊）\n"
