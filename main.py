@@ -1201,8 +1201,7 @@ class WerewolfPlugin(Star):
             yield event.plain_result("❌ 请指定投票目标！\n使用：/投票 编号 (输入 0 弃票)\n示例：/投票 2")
             return
 
-        # === 修改点 1：处理弃票逻辑 ===
-        target_id = None
+        # === 核心修改：识别 0 为弃票 ===
         if target_str == "0":
             target_id = "ABSTAIN"
         else:
@@ -1210,44 +1209,41 @@ class WerewolfPlugin(Star):
             target_id = self._parse_target(target_str, room)
 
         # 验证逻辑
-        if target_id == "ABSTAIN":
-            # 弃票总是允许的
-            pass
-        elif not target_id:
-            yield event.plain_result(f"❌ 无效的目标：{target_str}\n请使用玩家编号（1-9），或输入 0 弃票")
-            return
-        elif target_id not in room["alive"]:
-            yield event.plain_result("❌ 目标玩家已经出局！")
-            return
-        elif room.get("is_pk_vote"):
-            # 如果是PK投票，验证目标必须在PK玩家列表中
-            if target_id not in room.get("pk_players", []):
-                pk_names = [self._format_player_name(pid, room) for pid in room["pk_players"]]
-                yield event.plain_result(
-                    f"❌ PK投票只能投给平票玩家！(或输入 0 弃票)\n\n"
-                    f"可投票对象：\n" + "\n".join([f"  • {name}" for name in pk_names])
-                )
+        if target_id != "ABSTAIN":
+            if not target_id:
+                yield event.plain_result(f"❌ 无效的目标：{target_str}\n请使用玩家编号（1-9），或输入 0 弃票")
                 return
+            elif target_id not in room["alive"]:
+                yield event.plain_result("❌ 目标玩家已经出局！")
+                return
+            elif room.get("is_pk_vote"):
+                # 如果是PK投票，验证目标必须在PK玩家列表中
+                if target_id not in room.get("pk_players", []):
+                    pk_names = [self._format_player_name(pid, room) for pid in room["pk_players"]]
+                    yield event.plain_result(
+                        f"❌ PK投票只能投给平票玩家！(或输入 0 弃票)\n\n"
+                        f"可投票对象：\n" + "\n".join([f"  • {name}" for name in pk_names])
+                    )
+                    return
 
         # 记录投票
         room["day_votes"][player_id] = target_id
 
-        # 记录日志
+        # 记录日志与反馈
         voter_name = self._format_player_name(player_id, room)
         
-        # === 修改点 2：针对弃票的日志和回复 ===
         if target_id == "ABSTAIN":
+            log_msg = f"🗳️ {voter_name} 弃票"
             if room.get("is_pk_vote"):
-                room["game_log"].append(f"🗳️ PK投票：{voter_name} 弃票")
-            else:
-                room["game_log"].append(f"🗳️ {voter_name} 弃票")
+                 log_msg = f"🗳️ PK投票：{voter_name} 弃票"
+            room["game_log"].append(log_msg)
             yield event.plain_result(f"✅ 你选择了弃票！当前已投票 {len(room['day_votes'])}/{len(room['alive'])} 人")
         else:
             target_name = self._format_player_name(target_id, room)
+            log_msg = f"🗳️ {voter_name} 投票给 {target_name}"
             if room.get("is_pk_vote"):
-                room["game_log"].append(f"🗳️ PK投票：{voter_name} 投给 {target_name}")
-            else:
-                room["game_log"].append(f"🗳️ {voter_name} 投票给 {target_name}")
+                log_msg = f"🗳️ PK投票：{voter_name} 投给 {target_name}"
+            room["game_log"].append(log_msg)
             yield event.plain_result(f"✅ 投票成功！当前已投票 {len(room['day_votes'])}/{len(room['alive'])} 人")
 
         # 检查是否所有人都投票了
@@ -1258,7 +1254,6 @@ class WerewolfPlugin(Star):
             result = await self._process_day_vote(group_id)
             if result:
                 yield event.plain_result(result)
-
     @filter.command("开枪")
     async def hunter_shoot(self, event: AstrMessageEvent):
         """猎人开枪（私聊）"""
@@ -2210,18 +2205,23 @@ class WerewolfPlugin(Star):
         """处理白天投票结果"""
         room = self.game_rooms[group_id]
 
-        # 统计票数
+        # === 核心修改：统计票数时排除弃票 ===
+        valid_votes = [t for t in room["day_votes"].values() if t != "ABSTAIN"]
+        abstain_count = len(room["day_votes"]) - len(valid_votes)
+
+        # 情况1：如果没有有效票（全员弃票），直接调用辅助函数
+        if not valid_votes:
+            await self._enter_night_without_death(group_id, f"{abstain_count}人弃票")
+            return None
+
+        # 统计有效票数
         vote_counts = {}
-        for voter, target in room["day_votes"].items():
+        for target in valid_votes:
             vote_counts[target] = vote_counts.get(target, 0) + 1
 
         # 获取票数最多的目标
-        if not vote_counts:
-            return ""
-
         max_votes = max(vote_counts.values())
         targets = [pid for pid, count in vote_counts.items() if count == max_votes]
-
         # 检查是否平票
         if len(targets) > 1 and not room.get("is_pk_vote"):
             # 第一次投票平票，进入PK环节
@@ -2257,47 +2257,8 @@ class WerewolfPlugin(Star):
 
         # 如果是二次投票仍然平票，本轮无人出局
         if len(targets) > 1 and room.get("is_pk_vote"):
-            # PK投票后仍然平票，无人出局
-            room["is_pk_vote"] = False
-            room["pk_players"] = []
-            room["day_votes"] = {}
-
-            # 记录日志
-            room["game_log"].append("📊 PK投票结果：仍然平票，本轮无人出局")
-
-            # 进入下一个夜晚
-            room["phase"] = GamePhase.NIGHT_WOLF
-            room["seer_checked"] = False
-            room["is_first_night"] = False
-            room["current_round"] += 1  # 回合数+1
-
-            # 记录日志
-            room["game_log"].append(LOG_SEPARATOR)
-            room["game_log"].append(f"第{room['current_round']}晚")
-            room["game_log"].append(LOG_SEPARATOR)
-
-            # 先开启全员禁言
-            await self._set_group_whole_ban(group_id, room, True)
-
-            # 再发送消息
-            result_text = (
-                "\n📊 PK投票结果：仍然平票！\n\n"
-                "本轮无人出局，直接进入夜晚！\n\n"
-                "🌙 夜晚降临，天黑请闭眼...\n\n"
-                "🐺 狼人请私聊使用：/狼人杀 办掉 编号\n"
-                "🔮 预言家请等待狼人行动完成\n"
-                "⏰ 剩余时间：2分钟"
-            )
-
-            if room.get("msg_origin"):
-                result_message = MessageChain().message(result_text)
-                await self.context.send_message(room["msg_origin"], result_message)
-
-            # 启动狼人定时器
-            room["timer_task"] = asyncio.create_task(self._wolf_kill_timeout(group_id))
-
-            return None  # 消息已发送，返回None
-
+            await self._enter_night_without_death(group_id, "PK再次平票")
+            return None
         # 只有一个人得票最多
         if len(targets) == 1:
             exiled_player = targets[0]
@@ -2447,7 +2408,39 @@ class WerewolfPlugin(Star):
         if room.get("timer_task") and not room["timer_task"].done():
             room["timer_task"].cancel()
             room["timer_task"] = None
-
+    async def _enter_night_without_death(self, group_id: str, reason: str):
+        """辅助：无人出局，直接入夜（简化代码用）"""
+        room = self.game_rooms[group_id]
+        
+        # 1. 记录日志与重置状态
+        room["game_log"].append(f"📊 结果：{reason}，本轮无人出局")
+        room["is_pk_vote"] = False
+        room["pk_players"] = []
+        room["day_votes"] = {}
+        
+        # 2. 状态流转到下一夜
+        room["phase"] = GamePhase.NIGHT_WOLF
+        room["seer_checked"] = False
+        room["is_first_night"] = False
+        room["current_round"] += 1
+        
+        # 3. 记录分段日志
+        room["game_log"].extend([LOG_SEPARATOR, f"第{room['current_round']}晚", LOG_SEPARATOR])
+        
+        # 4. 禁言并发送通知
+        await self._set_group_whole_ban(group_id, room, True)
+        if room.get("msg_origin"):
+            msg = MessageChain().message(
+                f"📊 {reason}，本轮无人出局！\n\n"
+                "🌙 夜晚降临，天黑请闭眼...\n"
+                "🐺 狼人请私聊 /办掉 编号\n"
+                "🔮 预言家请等待\n"
+                "⏰ 剩余时间：2分钟"
+            )
+            await self.context.send_message(room["msg_origin"], msg)
+            
+        # 5. 启动定时器
+        room["timer_task"] = asyncio.create_task(self._wolf_kill_timeout(group_id))
     async def _notify_witch(self, group_id: str, witch_id: str, room: Dict):
         """给女巫发私聊告知谁被杀"""
         try:
