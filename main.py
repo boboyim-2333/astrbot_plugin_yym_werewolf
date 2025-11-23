@@ -2150,9 +2150,11 @@ class WerewolfPlugin(Star):
         room["last_killed"] = killed_player
 
         # 记录日志
-        killed_name = self._format_player_name(killed_player, room)
-        room["game_log"].append(f"🌙 狼人最终决定刀 {killed_name}")
-
+        if room.get("last_killed"):
+            killed_name = self._format_player_name(killed_player, room)
+            room["game_log"].append(f"🌙 狼人最终决定刀 {killed_name}")
+        else:
+            room["game_log"].append(f"🌙 狼人未采取行动")
         # 禁言被杀玩家（暂时不禁言，等遗言完毕后再禁言）
         # await self._ban_player(group_id, killed_player, room)
 
@@ -2162,12 +2164,19 @@ class WerewolfPlugin(Star):
         # 注意：全员禁言在女巫行动完成后才解除，确保夜晚行动全程处于禁言状态
 
         # 构造结果消息并存储（用于女巫查看和最后天亮）
-        killed_name = self._format_player_name(killed_player, room)
-        result_text = (
-            f"☀️ 天亮了！\n\n"
-            f"昨晚，玩家 {killed_name} 死了！\n\n"
-            f"存活玩家：{len(room['alive'])}/{len(room['players'])}\n\n"
-        )
+        if room.get("last_killed"):
+            killed_name = self._format_player_name(killed_player, room)
+            result_text = (
+                f"☀️ 天亮了！\n\n"
+                f"昨晚，玩家 {killed_name} 死了！\n\n"
+                f"存活玩家：{len(room['alive'])}/{len(room['players'])}\n\n"
+            )
+        else:
+            result_text = (
+                f"☀️ 天亮了！\n\n"
+                f"昨晚没有人被杀！\n\n"
+                f"存活玩家：{len(room['alive'])}/{len(room['players'])}\n\n"
+            )
 
         # 检查胜利条件
         victory_msg, winning_faction = self._check_victory_condition(room)
@@ -2508,14 +2517,8 @@ class WerewolfPlugin(Star):
         # 3. 构造天亮消息
         if room.get("night_result") and room.get("msg_origin"):
             # 修改原有的天亮消息，加入女巫毒人信息
-            if room.get("witch_saved"):
-                # 有人被救
-                result_text = (
-                    f"☀️ 天亮了！\n\n"
-                    f"昨晚是平安夜，没有人死亡！\n\n"
-                    f"存活玩家：{len(room['alive'])}/{len(room['players'])}\n\n"
-                )
-            else:
+
+            if room.get("last_killed"):
                 # 使用原有的被杀消息
                 result_text = room["night_result"]
 
@@ -2527,9 +2530,26 @@ class WerewolfPlugin(Star):
             # 添加毒人信息
             if room.get("witch_poisoned"):
                 poisoned_name = self._format_player_name(room["witch_poisoned"], room)
-                result_text += f"\n同时，玩家 {poisoned_name} 死了！\n"
+                result_text += (f"\n同时，玩家 {poisoned_name} 死了！\n"
+                                f"存活玩家：{len(room['alive'])}/{len(room['players'])}\n\n")
                 # 注意：被毒者没有遗言
-
+            
+            # <修改bug>如果没人死(使用解药或者狼人没行动) 并且 没有使用毒药的话 就是平安夜
+            if (not room.get("last_killed") and not room.get("witch_poisoned")):
+                result_text = (
+                    f"☀️ 天亮了！\n\n"
+                    f"昨晚是平安夜，没有人死亡！\n\n"
+                    f"存活玩家：{len(room['alive'])}/{len(room['players'])}\n\n"
+                )
+            
+            # <修改bug>狼人没行动 但是 女巫使用了毒药
+            if (not room.get("last_killed") and room.get("witch_poisoned")):
+                poisoned_name = self._format_player_name(room["witch_poisoned"], room)
+                result_text = (
+                    f"☀️ 天亮了！\n\n"
+                    f"昨晚，玩家 {poisoned_name} 死了！\n\n"
+                    f"存活玩家：{len(room['alive'])}/{len(room['players'])}\n\n"
+                )
             # 重新检查胜利条件
             victory_msg, winning_faction = self._check_victory_condition(room)
             if victory_msg:
