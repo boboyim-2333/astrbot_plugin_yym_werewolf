@@ -1353,6 +1353,7 @@ class WerewolfPlugin(Star):
                 await self.context.send_message(room["msg_origin"], result_msg)
 
                 # 生成AI复盘（异步，不阻塞）
+                logger.info(f"[狼人杀] 正在生成AI复盘")
                 try:
                     ai_review = await self._generate_ai_review(room, winning_faction)
                     if ai_review:
@@ -1609,6 +1610,7 @@ class WerewolfPlugin(Star):
 
     async def _unban_all_players(self, group_id: str, room: Dict):
         """解除所有被禁言玩家"""
+        logger.info(f"开始执行解除禁言")
         for player_id in room["banned_players"]:
             try:
                 await room["bot"].set_group_ban(
@@ -2173,33 +2175,10 @@ class WerewolfPlugin(Star):
                 f"存活玩家：{len(room['alive'])}/{len(room['players'])}\n\n"
             )
 
-        # 检查胜利条件
-        victory_msg, winning_faction = self._check_victory_condition(room)
-        if victory_msg:
-            result_text += f"🎉 {victory_msg}\n游戏结束！\n\n"
-            # 公布所有玩家身份
-            result_text += self._get_all_players_roles(room)
-            room["phase"] = GamePhase.FINISHED
+        # 检查胜利条件(去掉了)
+        
 
-            # 立即发送游戏结束消息（不能只存储，因为后续会清理房间）
-            if room.get("msg_origin"):
-                result_message = MessageChain().message(result_text)
-                await self.context.send_message(room["msg_origin"], result_message)
-
-                # 生成AI复盘
-                try:
-                    ai_review = await self._generate_ai_review(room, winning_faction)
-                    if ai_review:
-                        review_msg = MessageChain().message(ai_review)
-                        await self.context.send_message(room["msg_origin"], review_msg)
-                except Exception as e:
-                    logger.error(f"[狼人杀] AI复盘发送失败: {e}")
-
-            # 清理房间
-            await self._cleanup_room(group_id)
-        else:
-            # 存储结果到房间（不包含遗言提示，由后续逻辑决定）
-            room["night_result"] = result_text
+        room["night_result"] = result_text
 
     async def _process_day_vote(self, group_id: str) -> str:
         """处理白天投票结果"""
@@ -2344,6 +2323,7 @@ class WerewolfPlugin(Star):
                 await self.context.send_message(room["msg_origin"], result_message)
 
                 # 生成AI复盘
+                logger.info(f"[狼人杀] 正在生成AI复盘")
                 try:
                     ai_review = await self._generate_ai_review(room, winning_faction)
                     if ai_review:
@@ -2547,13 +2527,25 @@ class WerewolfPlugin(Star):
             # 重新检查胜利条件
             victory_msg, winning_faction = self._check_victory_condition(room)
             if victory_msg:
-                result_text += f"\n🎉 {victory_msg}\n游戏结束！\n\n"
+                result_text += f"🎉 {victory_msg}\n游戏结束！\n\n"
+                # 公布所有玩家身份
                 result_text += self._get_all_players_roles(room)
                 room["phase"] = GamePhase.FINISHED
 
-                # 发送结果
-                result_message = MessageChain().message(result_text)
-                await self.context.send_message(room["msg_origin"], result_message)
+                # 立即发送游戏结束消息（不能只存储，因为后续会清理房间）
+                if room.get("msg_origin"):
+                    result_message = MessageChain().message(result_text)
+                    await self.context.send_message(room["msg_origin"], result_message)
+
+                    logger.info(f"[狼人杀] 正在生成AI复盘")
+                    # 生成AI复盘
+                    try:
+                        ai_review = await self._generate_ai_review(room, winning_faction)
+                        if ai_review:
+                            review_msg = MessageChain().message(ai_review)
+                            await self.context.send_message(room["msg_origin"], review_msg)
+                    except Exception as e:
+                        logger.error(f"[狼人杀] AI复盘发送失败: {e}")
 
                 # 清理房间
                 await self._cleanup_room(group_id)
@@ -2740,10 +2732,22 @@ class WerewolfPlugin(Star):
                 result_text += self._get_all_players_roles(room)
                 room["phase"] = GamePhase.FINISHED
 
-                await self.context.send_message(room["msg_origin"], MessageChain().message(result_text))
+                if room.get("msg_origin"):
+                result_message = MessageChain().message(result_text)
+                await self.context.send_message(room["msg_origin"], result_message)
+
+                logger.info(f"[狼人杀] 正在生成AI复盘")
+                # 生成AI复盘
+                try:
+                    ai_review = await self._generate_ai_review(room, winning_faction)
+                    if ai_review:
+                        review_msg = MessageChain().message(ai_review)
+                        await self.context.send_message(room["msg_origin"], review_msg)
+                except Exception as e:
+                    logger.error(f"[狼人杀] AI复盘发送失败: {e}")
                 await self._cleanup_room(group_id)
                 return
-
+            
             # 游戏继续，进入遗言阶段（被放逐的人）
             room["phase"] = GamePhase.LAST_WORDS
             room["last_words_from_vote"] = True
