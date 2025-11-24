@@ -590,7 +590,7 @@ class WerewolfPlugin(Star):
         werewolves = [pid for pid, role in room["roles"].items() if role == "werewolf" and pid in room["alive"]]
         if len(room["night_votes"]) >= len(werewolves):
             # 取消狼人定时器
-            self._cancel_timer(room)
+            await self._cancel_timer(room)
 
             # 处理夜晚办掉，将结果存储到房间
             await self._process_night_kill(group_id)
@@ -746,7 +746,7 @@ class WerewolfPlugin(Star):
         room["seer_checked"] = True
 
         # 取消预言家定时器
-        self._cancel_timer(room)
+        await self._cancel_timer(room)
 
         # 返回验人结果
         target_name = self._format_player_name(target_id, room)
@@ -857,7 +857,7 @@ class WerewolfPlugin(Star):
         room["witch_acted"] = True
 
         # 取消定时器
-        self._cancel_timer(room)
+        await self._cancel_timer(room)
 
         saved_name = self._format_player_name(room["last_killed"], room)
         witch_name = self._format_player_name(player_id, room)
@@ -930,7 +930,7 @@ class WerewolfPlugin(Star):
         room["witch_acted"] = True
 
         # 取消定时器
-        self._cancel_timer(room)
+        await self._cancel_timer(room)
 
         poisoned_name = self._format_player_name(target_id, room)
         witch_name = self._format_player_name(player_id, room)
@@ -974,7 +974,7 @@ class WerewolfPlugin(Star):
         room["witch_acted"] = True
 
         # 取消定时器
-        self._cancel_timer(room)
+        await self._cancel_timer(room)
 
         # 记录日志
         witch_name = self._format_player_name(player_id, room)
@@ -1008,7 +1008,7 @@ class WerewolfPlugin(Star):
             return
 
         # 取消定时器
-        self._cancel_timer(room)
+        await self._cancel_timer(room)
 
         # 记录遗言内容到游戏日志
         player_name = self._format_player_name(player_id, room)
@@ -1096,7 +1096,7 @@ class WerewolfPlugin(Star):
             return
 
         # 取消定时器
-        self._cancel_timer(room)
+        await self._cancel_timer(room)
 
         # 记录发言内容到游戏日志
         player_name = self._format_player_name(player_id, room)
@@ -1154,7 +1154,7 @@ class WerewolfPlugin(Star):
             return
 
         # 取消定时器
-        self._cancel_timer(room)
+        await self._cancel_timer(room)
 
         # 取消当前发言者的临时管理员
         if room.get("current_speaker"):
@@ -1249,7 +1249,7 @@ class WerewolfPlugin(Star):
         # 检查是否所有人都投票了
         if len(room["day_votes"]) >= len(room["alive"]):
             # 取消投票定时器
-            self._cancel_timer(room)
+            await self._cancel_timer(room)
 
             result = await self._process_day_vote(group_id)
             if result:
@@ -1338,7 +1338,7 @@ class WerewolfPlugin(Star):
             await self.context.send_message(room["msg_origin"], shot_msg)
 
         # 取消定时器
-        self._cancel_timer(room)
+        await self._cancel_timer(room)
 
         # 检查游戏是否结束
         victory_msg, winning_faction = self._check_victory_condition(room)
@@ -1525,7 +1525,7 @@ class WerewolfPlugin(Star):
             # 恢复群昵称
             await self._restore_group_cards(group_id, room)
             # 取消定时器
-            self._cancel_timer(room)
+            await self._cancel_timer(room)
             # 解除所有禁言
             await self._unban_all_players(group_id, room)
             # 解除全员禁言
@@ -2403,11 +2403,12 @@ class WerewolfPlugin(Star):
 
     # ========== 定时器相关函数 ==========
 
-    def _cancel_timer(self, room: Dict):
+    async def _cancel_timer(self, room: Dict):
         """取消当前定时器"""
         if room.get("timer_task") and not room["timer_task"].done():
             room["timer_task"].cancel()
-            room["timer_task"] = None
+        room["timer_task"] = None
+
     async def _enter_night_without_death(self, group_id: str, reason: str):
         """辅助：无人出局，直接入夜（简化代码用）"""
         room = self.game_rooms[group_id]
